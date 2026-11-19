@@ -115,6 +115,16 @@ func main() {
 		}
 	}()
 
+	if autobanRuntime != nil {
+		socket := cfg.Autoban.AdminSocket
+		if socket == "" {
+			socket = "/run/coraza-spoa/autoban-admin.sock"
+		}
+		if err := autobanRuntime.StartAdmin(socket); err != nil {
+			globalLogger.Fatal().Err(err).Msg("Failed starting autoban admin socket")
+		}
+	}
+
 	network, address := cfg.networkAddressFromBind()
 	if network == "unix" {
 		if fi, err := os.Lstat(address); err == nil {

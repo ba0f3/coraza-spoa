@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/corazawaf/coraza-spoa/internal/autoban"
 )
@@ -25,6 +28,10 @@ type autobanRuntime struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
+
+	adminMu       sync.Mutex
+	adminServer   *http.Server
+	adminListener net.Listener
 }
 
 // newAutobanRuntime initializes dependencies after validation-only mode exits.
@@ -91,6 +98,32 @@ func sameRestartSettings(oldCfg, newCfg autoban.Config, oldRedis, newRedis autob
 		reflect.DeepEqual(oldRedis, newRedis)
 }
 
+// StartAdmin binds the admin API to the configured Unix socket only.
+func (r *autobanRuntime) StartAdmin(path string) error {
+	if r == nil || !r.config.Enabled() {
+		return nil
+	}
+	handler := autoban.NewAdminHandler(r.store, func() autoban.Config {
+		r.mu.RLock()
+		defer r.mu.RUnlock()
+		return r.config
+	})
+	server, listener, err := autoban.NewAdminSocket(path, handler)
+	if err != nil {
+		return err
+	}
+	r.adminMu.Lock()
+	r.adminServer, r.adminListener = server, listener
+	r.adminMu.Unlock()
+	go func() {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			// A socket failure degrades administration only; SPOA stays live.
+			return
+		}
+	}()
+	return nil
+}
+
 // Track marks a policy operation as active for bounded shutdown.
 func (r *autobanRuntime) Track() func() {
 	if r == nil {
@@ -108,6 +141,13 @@ func (r *autobanRuntime) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	r.cancel()
+	r.adminMu.Lock()
+	if r.adminServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = r.adminServer.Shutdown(shutdownCtx)
+		cancel()
+	}
+	r.adminMu.Unlock()
 	done := make(chan struct{})
 	go func() { r.wg.Wait(); close(done) }()
 	select {
