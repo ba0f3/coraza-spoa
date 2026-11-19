@@ -10,6 +10,10 @@ Coraza SPOA is a system daemon which brings the Coraza Web Application Firewall 
 
 HAProxy includes a [Stream Processing Offload Engine](https://www.haproxy.com/blog/extending-haproxy-with-the-stream-processing-offload-engine) [SPOE](https://raw.githubusercontent.com/haproxy/haproxy/master/doc/SPOE.txt) to offload request processing to a Stream Processing Offload Agent (SPOA). Coraza SPOA embeds the [Coraza Engine](https://github.com/corazawaf/coraza), loads the ruleset and filters http requests or application responses which are passed forwarded by HAProxy for inspection.
 
+## Fork development specifications
+
+Implementation specifications and task plans for this fork are listed in [docs/README.md](docs/README.md). The cluster auto-ban documents describe planned behavior; they do not indicate that the feature is already implemented.
+
 ## Compilation
 
 ### Build
