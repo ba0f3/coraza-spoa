@@ -186,7 +186,7 @@ func TestRedisBudgetAndNoReplay(t *testing.T) {
 	})
 
 	t.Run("NOSCRIPT recovery shares original deadline", func(t *testing.T) {
-		fake := &fakeRedis{shaErr: redis.Nil}
+		fake := &fakeRedis{shaErr: errors.New("NOSCRIPT No matching script")}
 		store := newRedisStoreWithClient(testRedisConfig(), fake)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()

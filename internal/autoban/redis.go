@@ -2,7 +2,9 @@ package autoban
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -209,7 +211,7 @@ func (s *RedisStore) evalWithScript(ctx context.Context, script string, keys []s
 	defer cancel()
 	hash := scriptHash(script)
 	cmd := s.client.EvalSha(opCtx, hash, keys, args...)
-	if errors.Is(cmd.Err(), redis.Nil) {
+	if cmd.Err() != nil && strings.Contains(strings.ToUpper(cmd.Err().Error()), "NOSCRIPT") {
 		if _, err := s.client.ScriptLoad(opCtx, script).Result(); err != nil {
 			return nil, classifyRedisError(err, false)
 		}
@@ -243,17 +245,7 @@ func classifyRedisError(err error, mutation bool) error {
 	return &StoreError{Reason: reason, Uncertain: uncertain && mutation, Err: err}
 }
 
-// Script sources are replaced by the atomic algorithms in Task 4. These
-// placeholders keep the transport compilable and read-only in the meantime.
-var (
-	beginScript   = `return {0}`
-	observeScript = `return {0}`
-	unbanScript   = `return {0}`
-	inspectScript = `return {0}`
-	listScript    = `return {0}`
-)
-
-// Store implementation. Parsing helpers are supplied with the Lua algorithms.
+// Store implementation: every accessed key is explicit in the script call.
 func (s *RedisStore) Begin(ctx context.Context, cmd BeginCommand) (BeginResult, error) {
 	keys := []string{
 		stateKey(s.config.KeyPrefix, cmd.Subject.Mode, ScopeGlobal, "", cmd.Subject.IP),
@@ -261,7 +253,13 @@ func (s *RedisStore) Begin(ctx context.Context, cmd BeginCommand) (BeginResult, 
 		fenceKey(s.config.KeyPrefix, cmd.Subject.Mode, ScopeGlobal, "", cmd.Subject.IP),
 		fenceKey(s.config.KeyPrefix, cmd.Subject.Mode, ScopeApplication, cmd.Subject.Application, cmd.Subject.IP),
 	}
-	args := []interface{}{cmd.Subject.Mode, cmd.Subject.Application, ipHex(cmd.Subject.IP)}
+	args := []interface{}{
+		string(cmd.Subject.Mode), cmd.Subject.Application, ipHex(cmd.Subject.IP),
+		s.config.KeyPrefix + "-revision", requestIDHex(cmd.RequestID), len(cmd.Rates),
+	}
+	for _, r := range cmd.Rates {
+		args = append(args, r.Ref.Fingerprint, r.Requests, r.PeriodMS, r.Burst)
+	}
 	res, err := s.evalWithScript(ctx, beginScript, keys, args)
 	if err != nil {
 		return BeginResult{}, err
@@ -276,7 +274,15 @@ func (s *RedisStore) Observe(ctx context.Context, cmd ObserveCommand) (ObserveRe
 		fenceKey(s.config.KeyPrefix, cmd.Subject.Mode, ScopeGlobal, "", cmd.Subject.IP),
 		fenceKey(s.config.KeyPrefix, cmd.Subject.Mode, ScopeApplication, cmd.Subject.Application, cmd.Subject.IP),
 	}
-	args := []interface{}{cmd.Subject.Mode, cmd.Subject.Application, ipHex(cmd.Subject.IP)}
+	args := []interface{}{
+		string(cmd.Subject.Mode), cmd.Subject.Application, ipHex(cmd.Subject.IP),
+		requestIDHex(cmd.RequestID), cmd.Revision, cmd.AdmittedAtMS,
+		nonceFor(cmd.Fences, ScopeGlobal), nonceFor(cmd.Fences, ScopeApplication),
+		len(cmd.Policies),
+	}
+	for _, p := range cmd.Policies {
+		args = append(args, p.Ref.Fingerprint, p.Ref.ID, string(p.Ref.Scope), p.Threshold, p.WindowMS, p.BanForMS)
+	}
 	res, err := s.evalWithScript(ctx, observeScript, keys, args)
 	if err != nil {
 		return ObserveResult{}, err
@@ -285,8 +291,20 @@ func (s *RedisStore) Observe(ctx context.Context, cmd ObserveCommand) (ObserveRe
 }
 
 func (s *RedisStore) Unban(ctx context.Context, req UnbanRequest) (UnbanResult, error) {
-	key := stateKey(s.config.KeyPrefix, req.Mode, req.Scope, req.Application, req.IP)
-	res, err := s.evalWithScript(ctx, unbanScript, []string{key}, []interface{}{req.Mode, req.OperationID})
+	state := stateKey(s.config.KeyPrefix, req.Mode, req.Scope, req.Application, req.IP)
+	fence := fenceKey(s.config.KeyPrefix, req.Mode, req.Scope, req.Application, req.IP)
+	receipt := adminKey(s.config.KeyPrefix, req.Mode, req.IP, adminScopeID(req.Scope, req.Application), req.OperationID)
+	other := stateKey(s.config.KeyPrefix, req.Mode, ScopeGlobal, "", req.IP)
+	nonce, err := randomNonce()
+	if err != nil {
+		return UnbanResult{}, &StoreError{Reason: ReasonEntropyFailure, Err: err}
+	}
+	digest := adminDigest(req)
+	args := []interface{}{
+		string(req.Scope), req.OperationID, digest, nonce,
+		req.SuppressFor.Milliseconds(),
+	}
+	res, err := s.evalWithScript(ctx, unbanScript, []string{state, fence, receipt, other}, args)
 	if err != nil {
 		return UnbanResult{}, err
 	}
@@ -300,7 +318,7 @@ func (s *RedisStore) Inspect(ctx context.Context, req InspectRequest) (InspectRe
 		fenceKey(s.config.KeyPrefix, req.Subject.Mode, ScopeGlobal, "", req.Subject.IP),
 		fenceKey(s.config.KeyPrefix, req.Subject.Mode, ScopeApplication, req.Subject.Application, req.Subject.IP),
 	}
-	res, err := s.evalWithScript(ctx, inspectScript, keys, []interface{}{req.Subject.Mode})
+	res, err := s.evalWithScript(ctx, inspectScript, keys, []interface{}{string(req.Subject.Mode)})
 	if err != nil {
 		return InspectResult{}, err
 	}
@@ -308,9 +326,41 @@ func (s *RedisStore) Inspect(ctx context.Context, req InspectRequest) (InspectRe
 }
 
 func (s *RedisStore) List(ctx context.Context, req ListRequest) (ListResult, error) {
-	res, err := s.eval(ctx, listScript, nil, []interface{}{req.Mode, req.Scope, req.Limit}, false)
+	pattern := fmt.Sprintf("%s:v1:%s:{*}:state", s.config.KeyPrefix, req.Mode)
+	if req.Scope == ScopeApplication {
+		pattern += ":app:" + encodeApp(req.Application)
+	} else {
+		pattern += ":global"
+	}
+	res, err := s.eval(ctx, listScript, nil, []interface{}{pattern, req.Cursor, req.Limit}, false)
 	if err != nil {
 		return ListResult{}, err
 	}
 	return parseListResult(res)
+}
+
+func nonceFor(m map[Scope]string, scope Scope) string {
+	if m == nil {
+		return "none"
+	}
+	if nonce, ok := m[scope]; ok && nonce != "" {
+		return nonce
+	}
+	return "none"
+}
+
+func randomNonce() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func adminDigest(req UnbanRequest) string {
+	canonical := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%s|%s",
+		req.Mode, req.Scope, req.Application, ipHex(req.IP), req.OperationID,
+		req.SuppressFor.Milliseconds(), req.Reason, adminScopeID(req.Scope, req.Application))
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])
 }
