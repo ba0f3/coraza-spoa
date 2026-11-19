@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/corazawaf/coraza-spoa/internal"
+	"github.com/corazawaf/coraza-spoa/internal/autoban"
 )
 
 func readConfig() (*config, error) {
@@ -48,20 +49,32 @@ func readConfig() (*config, error) {
 		}
 	}
 
+	compiledAutoban, redisAutoban, err := compileAutoban(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid autoban configuration: %w", err)
+	}
+	cfg.compiledAutoban = compiledAutoban
+	cfg.redisAutoban = redisAutoban
+
 	return &cfg, nil
 }
 
 type config struct {
-	Bind               string    `yaml:"bind"`
-	Log                logConfig `yaml:",inline"`
-	DefaultApplication string    `yaml:"default_application"`
+	Bind               string      `yaml:"bind"`
+	Log                logConfig   `yaml:",inline"`
+	DefaultApplication string      `yaml:"default_application"`
+	Autoban            autobanYAML `yaml:"autoban"`
 	Applications       []struct {
-		Log              logConfig `yaml:",inline"`
-		Name             string    `yaml:"name"`
-		Directives       string    `yaml:"directives"`
-		ResponseCheck    bool      `yaml:"response_check"`
-		TransactionTTLMS int       `yaml:"transaction_ttl_ms"`
+		Log              logConfig      `yaml:",inline"`
+		Name             string         `yaml:"name"`
+		Directives       string         `yaml:"directives"`
+		ResponseCheck    bool           `yaml:"response_check"`
+		TransactionTTLMS int            `yaml:"transaction_ttl_ms"`
+		Autoban          appAutobanYAML `yaml:"autoban"`
 	} `yaml:"applications"`
+
+	compiledAutoban autoban.Config
+	redisAutoban    autoban.RedisConfig
 }
 
 func (c config) networkAddressFromBind() (network string, address string) {
@@ -188,22 +201,22 @@ type logConfig struct {
 func (lc logConfig) outputWriter() (io.Writer, error) {
 	var out io.Writer
 	switch lc.File {
-		case "":
-			fallthrough
-		case "/dev/stdout":
-			out = os.Stdout
-		case "/dev/stderr":
-			out = os.Stderr
-		case "/dev/null":
-			out = io.Discard
-		default:
-			// TODO: Close the handle if not used anymore.
-			// Currently these are leaked as soon as we reload.
-			f, err := os.OpenFile(lc.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-			if err != nil {
-				return nil, err
-			}
-			out = f
+	case "":
+		fallthrough
+	case "/dev/stdout":
+		out = os.Stdout
+	case "/dev/stderr":
+		out = os.Stderr
+	case "/dev/null":
+		out = io.Discard
+	default:
+		// TODO: Close the handle if not used anymore.
+		// Currently these are leaked as soon as we reload.
+		f, err := os.OpenFile(lc.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+		out = f
 	}
 	return out, nil
 }

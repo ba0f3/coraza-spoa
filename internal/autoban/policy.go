@@ -15,7 +15,33 @@ type Config struct {
 	apps          map[string]*appConfig
 	globalMatches []matchPolicy
 	limits        storeLimits
+	redis         RedisConfig
 }
+
+// RedisConfig returns the resolved, secret-bearing Redis settings. It is kept
+// private on Config so request code cannot mutate connection settings.
+func (c Config) RedisConfig() RedisConfig { return c.redis }
+
+// Enabled reports whether auto-ban participates in requests.
+func (c Config) Enabled() bool { return c.enabled }
+
+// Mode reports the top-level effective mode.
+func (c Config) Mode() Mode { return c.mode }
+
+// Revision identifies the active configuration across nodes.
+func (c Config) Revision() string { return c.revision }
+
+// OperationTimeout reports the per-operation store timeout.
+func (c Config) OperationTimeout() time.Duration { return c.limits.operationTimeout }
+
+// RequestStoreBudget reports the total per-request store budget.
+func (c Config) RequestStoreBudget() time.Duration { return c.limits.requestBudget }
+
+// MaxConcurrentOperations reports the per-process concurrency limit.
+func (c Config) MaxConcurrentOperations() int { return c.limits.maxConcurrent }
+
+// GlobalPolicyCount reports the number of enabled global match policies.
+func (c Config) GlobalPolicyCount() int { return len(c.globalMatches) }
 
 type appConfig struct {
 	enabled bool
