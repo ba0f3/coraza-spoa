@@ -56,6 +56,7 @@ func newAutobanRuntime(ctx context.Context, compiled autoban.Config, redisConfig
 		return nil, err
 	}
 	r.engine = engine
+	autoban.SetConfigRevision(compiled.Revision())
 	return r, nil
 }
 
@@ -87,6 +88,7 @@ func (r *autobanRuntime) ReplaceConfig(compiled autoban.Config) error {
 	r.config = compiled
 	r.engine = engine
 	r.mu.Unlock()
+	autoban.SetConfigRevision(compiled.Revision())
 	return nil
 }
 

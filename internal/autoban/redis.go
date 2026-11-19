@@ -264,7 +264,15 @@ func (s *RedisStore) Begin(ctx context.Context, cmd BeginCommand) (BeginResult, 
 	if err != nil {
 		return BeginResult{}, err
 	}
-	return parseBeginResult(res)
+	result, err := parseBeginResult(res)
+	fillBanSubject(result.Bans, cmd.Subject)
+	return result, err
+}
+
+func fillBanSubject(bans []BanRecord, subject Subject) {
+	for i := range bans {
+		bans[i].Subject = subject
+	}
 }
 
 func (s *RedisStore) Observe(ctx context.Context, cmd ObserveCommand) (ObserveResult, error) {
@@ -287,7 +295,9 @@ func (s *RedisStore) Observe(ctx context.Context, cmd ObserveCommand) (ObserveRe
 	if err != nil {
 		return ObserveResult{}, err
 	}
-	return parseObserveResult(res)
+	result, err := parseObserveResult(res)
+	fillBanSubject(result.Bans, cmd.Subject)
+	return result, err
 }
 
 func (s *RedisStore) Unban(ctx context.Context, req UnbanRequest) (UnbanResult, error) {
@@ -308,7 +318,11 @@ func (s *RedisStore) Unban(ctx context.Context, req UnbanRequest) (UnbanResult, 
 	if err != nil {
 		return UnbanResult{}, err
 	}
-	return parseUnbanResult(res)
+	result, err := parseUnbanResult(res)
+	if result.OtherBan != nil {
+		result.OtherBan.Subject = Subject{Application: req.Application, IP: req.IP, Mode: req.Mode}
+	}
+	return result, err
 }
 
 func (s *RedisStore) Inspect(ctx context.Context, req InspectRequest) (InspectResult, error) {
@@ -322,7 +336,9 @@ func (s *RedisStore) Inspect(ctx context.Context, req InspectRequest) (InspectRe
 	if err != nil {
 		return InspectResult{}, err
 	}
-	return parseInspectResult(res)
+	result, err := parseInspectResult(res)
+	fillBanSubject(result.Bans, req.Subject)
+	return result, err
 }
 
 func (s *RedisStore) List(ctx context.Context, req ListRequest) (ListResult, error) {
