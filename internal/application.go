@@ -24,6 +24,8 @@ import (
 	"github.com/jcchavezs/mergefs"
 	"github.com/jcchavezs/mergefs/io"
 	"github.com/rs/zerolog"
+
+	"github.com/corazawaf/coraza-spoa/internal/autoban"
 )
 
 type AppConfig struct {
@@ -34,6 +36,7 @@ type AppConfig struct {
 	Logger         zerolog.Logger
 	TransactionTTL time.Duration
 	LogFormat      string
+	Autoban        *autoban.Engine
 }
 
 type rulesetVersion struct {
@@ -163,6 +166,20 @@ func (a *Application) HandleRequest(ctx context.Context, writer *encoding.Action
 		req.ID = sb.String()
 	}
 
+	policyID, idErr := newPolicyRequestID()
+	if idErr != nil {
+		a.Logger.Warn().Err(idErr).Msg("failed to generate policy request id")
+	}
+	adm, autobanDecision, denied := a.beginAutoban(ctx, &req, policyID)
+	if denied {
+		// No Coraza transaction is created for an enforced policy denial, so
+		// WAF transaction metrics are intentionally untouched.
+		if err := exportAutobanVars(writer, autobanDecision, policyID); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	tx := a.waf.NewTransactionWithID(req.ID)
 	requestsTotal.WithLabelValues(a.Name).Inc()
 	defer func() {
@@ -198,6 +215,14 @@ func (a *Application) HandleRequest(ctx context.Context, writer *encoding.Action
 	}()
 
 	defer exportWAFMetrics(writer, tx, req.ExportRuleIDs)
+
+	// Finalize policy evidence while the handler still owns the transaction.
+	// This defer runs before the cache/close defer above because it is declared
+	// later, so evidence is copied before ProcessLogging or ownership transfer.
+	defer func() {
+		autobanDecision = a.finishAutoban(ctx, adm, tx, err, policyID)
+		_ = exportAutobanVars(writer, autobanDecision, policyID)
+	}()
 
 	if err := writer.SetString(encoding.VarScopeTransaction, "id", tx.ID()); err != nil {
 		return err
