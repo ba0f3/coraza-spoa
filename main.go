@@ -103,6 +103,18 @@ func main() {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
 
+	autobanRuntime, err := newAutobanRuntime(ctx, cfg.compiledAutoban, cfg.redisAutoban)
+	if err != nil {
+		globalLogger.Fatal().Err(err).Msg("Failed initializing autoban runtime")
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := autobanRuntime.Shutdown(shutdownCtx); err != nil {
+			globalLogger.Error().Err(err).Msg("Failed shutting down autoban runtime")
+		}
+	}()
+
 	network, address := cfg.networkAddressFromBind()
 	if network == "unix" {
 		if fi, err := os.Lstat(address); err == nil {
@@ -122,6 +134,8 @@ func main() {
 	if err != nil {
 		globalLogger.Fatal().Err(err).Msg("Failed opening socket")
 	}
+
+	attachAutoban(apps, autobanRuntime)
 
 	a := &internal.Agent{
 		Context: ctx,
@@ -170,7 +184,7 @@ func main() {
 
 	if autoReload {
 		go func() {
-			if err := cfg.watchConfig(a); err != nil {
+			if err := cfg.watchConfig(a, autobanRuntime); err != nil {
 				globalLogger.Fatal().Err(err).Msg("Config watcher failed")
 			}
 		}()
@@ -190,7 +204,7 @@ outer:
 			break outer
 		case syscall.SIGHUP:
 			globalLogger.Info().Msg("Received SIGHUP, reloading configuration...")
-			newCfg, err := cfg.reloadConfig(a)
+			newCfg, err := cfg.reloadConfig(a, autobanRuntime)
 			if err != nil {
 				globalLogger.Error().Err(err).Msg("Failed to reload configuration, using old configuration")
 				continue

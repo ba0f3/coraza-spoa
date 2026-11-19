@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -86,7 +87,7 @@ func (c config) networkAddressFromBind() (network string, address string) {
 	return "tcp", c.Bind
 }
 
-func (c *config) reloadConfig(a *internal.Agent) (*config, error) {
+func (c *config) reloadConfig(a *internal.Agent, runtime *autobanRuntime) (*config, error) {
 	newCfg, err := readConfig()
 	if err != nil {
 		return nil, fmt.Errorf("error loading configuration: %w", err)
@@ -104,17 +105,39 @@ func (c *config) reloadConfig(a *internal.Agent) (*config, error) {
 		return nil, fmt.Errorf("changing bind is not supported yet")
 	}
 
+	if runtime != nil {
+		if newCfg.compiledAutoban.Enabled() != c.compiledAutoban.Enabled() ||
+			!reflect.DeepEqual(newCfg.redisAutoban, c.redisAutoban) ||
+			newCfg.Autoban.AdminSocket != c.Autoban.AdminSocket {
+			return nil, fmt.Errorf("changing autoban restart-only settings requires a restart")
+		}
+		if err := runtime.ReplaceConfig(newCfg.compiledAutoban); err != nil {
+			return nil, fmt.Errorf("replacing autoban policy: %w", err)
+		}
+	}
+
 	apps, err := newCfg.newApplications()
 	if err != nil {
 		return nil, fmt.Errorf("error applying configuration: %w", err)
 	}
+	attachAutoban(apps, runtime)
 
 	a.ReplaceApplications(apps, apps[newCfg.DefaultApplication])
 	globalLogger.Info().Msg("Configuration successfully reloaded")
 	return newCfg, nil
 }
 
-func (c *config) watchConfig(a *internal.Agent) error {
+func attachAutoban(apps map[string]*internal.Application, runtime *autobanRuntime) {
+	if runtime == nil {
+		return
+	}
+	engine := runtime.Engine()
+	for _, app := range apps {
+		app.Autoban = engine
+	}
+}
+
+func (c *config) watchConfig(a *internal.Agent, runtime *autobanRuntime) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("failed to create fsnotify watcher: %w", err)
@@ -147,7 +170,7 @@ func (c *config) watchConfig(a *internal.Agent) error {
 				if err != nil {
 					return fmt.Errorf("failed to add config directory to fsnotify watcher: %w", err)
 				}
-				newCfg, err := c.reloadConfig(a)
+				newCfg, err := c.reloadConfig(a, runtime)
 				if err != nil {
 					globalLogger.Error().Err(err).Msg("Failed to reload configuration, using old configuration")
 					continue
