@@ -47,6 +47,10 @@ func (a *Application) beginAutoban(ctx context.Context, req *applicationRequest,
 		RawPath:   string(req.Path),
 	}
 	adm, decision := a.Autoban.Begin(ctx, meta)
+	autoban.RecordDecision(a.Name, meta.Subject.Mode, decision)
+	if decision.Degraded {
+		autoban.AuditDegradation(a.Logger, a.Name, decision.Reason)
+	}
 	if decision.Degraded || decision.Action == autoban.ActionNone {
 		return adm, decision, false
 	}
@@ -105,7 +109,16 @@ func (a *Application) finishAutoban(ctx context.Context, adm autoban.Admission, 
 		return autoban.Decision{Action: autoban.ActionNone}
 	}
 	evidence := captureEvidence(tx, wafErr)
-	return a.Autoban.Observe(ctx, adm, evidence)
+	decision := a.Autoban.Observe(ctx, adm, evidence)
+	mode := adm.Meta.Subject.Mode
+	autoban.RecordDecision(a.Name, mode, decision)
+	if decision.Ban != nil {
+		autoban.AuditBan(a.Logger, *decision.Ban, adm.Meta.RequestID, "")
+	}
+	if decision.Degraded {
+		autoban.AuditDegradation(a.Logger, a.Name, decision.Reason)
+	}
+	return decision
 }
 
 // exportAutobanVars initializes every transaction-scoped policy variable.
