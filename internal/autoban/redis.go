@@ -61,24 +61,30 @@ func NewRedisStore(config RedisConfig) (*RedisStore, error) {
 	var client redisCmdRunner
 	if config.MasterName != "" {
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:       config.MasterName,
-			SentinelAddrs:    config.Addresses,
-			SentinelUsername: config.SentinelUsername,
-			SentinelPassword: config.SentinelPassword,
-			Username:         config.Username,
-			Password:         config.Password,
-			DB:               config.DB,
-			TLSConfig:        tlsConfig,
-			MaxRetries:       -1,
+			MasterName:            config.MasterName,
+			SentinelAddrs:         config.Addresses,
+			SentinelUsername:      config.SentinelUsername,
+			SentinelPassword:      config.SentinelPassword,
+			Username:              config.Username,
+			Password:              config.Password,
+			DB:                    config.DB,
+			TLSConfig:             tlsConfig,
+			MaxRetries:            -1,
+			ContextTimeoutEnabled: true,
+			ReadTimeout:           config.OperationTimeout,
+			WriteTimeout:          config.OperationTimeout,
 		})
 	} else {
 		client = redis.NewClient(&redis.Options{
-			Addr:       config.Addresses[0],
-			Username:   config.Username,
-			Password:   config.Password,
-			DB:         config.DB,
-			TLSConfig:  tlsConfig,
-			MaxRetries: -1,
+			Addr:                  config.Addresses[0],
+			Username:              config.Username,
+			Password:              config.Password,
+			DB:                    config.DB,
+			TLSConfig:             tlsConfig,
+			MaxRetries:            -1,
+			ContextTimeoutEnabled: true,
+			ReadTimeout:           config.OperationTimeout,
+			WriteTimeout:          config.OperationTimeout,
 		})
 	}
 	return newRedisStoreWithClient(config, client), nil

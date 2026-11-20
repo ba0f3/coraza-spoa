@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -280,6 +281,60 @@ func TestRedisSuppressionWindow(t *testing.T) {
 	}
 	_ = reset
 }
+
+func TestRedisRateFieldTTLPreserved(t *testing.T) {
+	longExp := int64(3_600_000) // 1h rate bucket, far beyond any match expiry
+
+	seed := func(t *testing.T) (*RedisStore, *redis.Client, RedisConfig, Subject, BeginResult, string) {
+		t.Helper()
+		store, raw, cfg := itStore(t)
+		subj := itSubject(ModeEnforce)
+		begin := itBegin(t, store, subj, RequestID{1})
+		key := stateKey(cfg.KeyPrefix, subj.Mode, ScopeApplication, subj.Application, subj.IP)
+		field := "r:long-rate"
+		value := `{"tokens":10,"t":` + itoa(begin.NowMS) + `,"exp":` + itoa(begin.NowMS+longExp) + `}`
+		if err := raw.HSet(context.Background(), key, field, value).Err(); err != nil {
+			t.Fatal(err)
+		}
+		return store, raw, cfg, subj, begin, key
+	}
+
+	t.Run("match strike path", func(t *testing.T) {
+		store, raw, _, subj, begin, key := seed(t)
+		p := match("a-ttl1", "ttl1", ScopeApplication, 2, 60_000, 30_000)
+		res := itObserve(t, store, subj, begin.NowMS, begin.Fences, RequestID{2}, p)
+		if len(res.Bans) != 0 {
+			t.Fatal("threshold 2 must not ban on first strike")
+		}
+		assertLongRateTTL(t, raw, key, longExp)
+	})
+
+	t.Run("ban creation path", func(t *testing.T) {
+		store, raw, _, subj, begin, key := seed(t)
+		p := match("a-ttl2", "ttl2", ScopeApplication, 1, 60_000, 30_000)
+		res := itObserve(t, store, subj, begin.NowMS, begin.Fences, RequestID{2}, p)
+		if len(res.Bans) != 1 {
+			t.Fatal("threshold 1 must ban")
+		}
+		assertLongRateTTL(t, raw, key, longExp)
+	})
+}
+
+func assertLongRateTTL(t *testing.T, raw *redis.Client, key string, longExp int64) {
+	t.Helper()
+	ttl, err := raw.PTTL(context.Background(), key).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ttl < time.Duration(longExp)*time.Millisecond/2 {
+		t.Fatalf("hash TTL %s truncated the long-lived rate bucket (want >= %s)", ttl, time.Duration(longExp)*time.Millisecond)
+	}
+	if n, err := raw.HExists(context.Background(), key, "r:long-rate").Result(); err != nil || !n {
+		t.Fatalf("rate field lost after state update: exists=%v err=%v", n, err)
+	}
+}
+
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 func TestRedisCleanAdmission(t *testing.T) {
 	store, raw, cfg := itStore(t)

@@ -13,9 +13,23 @@ const (
 
 // Engine applies an immutable policy snapshot to trusted request evidence.
 type Engine struct {
-	config Config
-	store  Store
-	now    func() time.Time
+	config  Config
+	store   Store
+	now     func() time.Time
+	tracker func() func()
+}
+
+// SetActivityTracker installs a runtime hook that bounds in-flight policy
+// operations during shutdown. It must be set before the engine is published.
+func (e *Engine) SetActivityTracker(tracker func() func()) { e.tracker = tracker }
+
+// Track marks one policy operation as active. Without a runtime tracker this
+// is a no-op, so unit tests and disabled runtimes stay unaffected.
+func (e *Engine) Track() func() {
+	if e == nil || e.tracker == nil {
+		return func() {}
+	}
+	return e.tracker()
 }
 
 // NewEngine captures a deep copy of config and owns no request resources.

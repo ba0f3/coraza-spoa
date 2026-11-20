@@ -1,4 +1,15 @@
 -- OBSERVE: atomic evidence update and ban creation.
+local function max_expiry(fields, floor_exp)
+  local maxexp = floor_exp
+  for _, raw in pairs(fields) do
+    local ok, obj = pcall(cjson.decode, raw)
+    if ok and type(obj) == "table" and obj.exp and tonumber(obj.exp) > maxexp then
+      maxexp = tonumber(obj.exp)
+    end
+  end
+  return maxexp
+end
+
 local mode, app, iphex, reqid, revision = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]
 local admitted = tonumber(ARGV[6])
 local captured_global, captured_app = ARGV[7], ARGV[8]
@@ -131,23 +142,31 @@ for i = 1, 2 do
       window_ms = t.window, created_at_ms = now, expires_at_ms = expires
     }
     redis.call("DEL", KEYS[i])
-    -- preserve rate fields
+    -- Preserve rate fields with their own logical expiries. The hash TTL must
+    -- cover every live field, not just the ban, or a long-period bucket is
+    -- silently destroyed when a short ban is created.
+    local preserved = {}
     for field, raw in pairs(state[i]) do
-      if field:sub(1, 2) == "r:" then redis.call("HSET", KEYS[i], field, raw) end
+      if field:sub(1, 2) == "r:" then
+        redis.call("HSET", KEYS[i], field, raw)
+        preserved[field] = raw
+      end
     end
-    redis.call("HSET", KEYS[i], "ban", cjson.encode(ban))
-    redis.call("PEXPIRE", KEYS[i], t.banfor + t.window + 30000)
+    local ban_raw = cjson.encode(ban)
+    redis.call("HSET", KEYS[i], "ban", ban_raw)
+    preserved["ban"] = ban_raw
+    local maxexp = max_expiry(preserved, now + t.banfor + t.window + 30000)
+    redis.call("PEXPIRE", KEYS[i], maxexp - now)
     bans[#bans + 1] = ban
   else
     for field, raw in pairs(changed[i]) do
       redis.call("HSET", KEYS[i], field, raw)
     end
     if next(changed[i]) then
-      local maxexp = now + 30000
-      for _, raw in pairs(changed[i]) do
-        local ok, obj = pcall(cjson.decode, raw)
-        if ok and tonumber(obj.exp) > maxexp then maxexp = tonumber(obj.exp) end
-      end
+      local all = {}
+      for field, raw in pairs(state[i]) do all[field] = raw end
+      for field, raw in pairs(changed[i]) do all[field] = raw end
+      local maxexp = max_expiry(all, now + 30000)
       redis.call("PEXPIRE", KEYS[i], maxexp - now)
     end
   end

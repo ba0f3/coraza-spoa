@@ -55,6 +55,7 @@ func newAutobanRuntime(ctx context.Context, compiled autoban.Config, redisConfig
 		store.Close()
 		return nil, err
 	}
+	engine.SetActivityTracker(r.Track)
 	r.engine = engine
 	autoban.SetConfigRevision(compiled.Revision())
 	return r, nil
@@ -84,6 +85,7 @@ func (r *autobanRuntime) ReplaceConfig(compiled autoban.Config) error {
 	if err != nil {
 		return err
 	}
+	engine.SetActivityTracker(r.Track)
 	r.mu.Lock()
 	r.config = compiled
 	r.engine = engine

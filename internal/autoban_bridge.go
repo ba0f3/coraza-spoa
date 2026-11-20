@@ -57,7 +57,9 @@ func (a *Application) beginAutoban(ctx context.Context, req *applicationRequest,
 		Method:    req.Method,
 		RawPath:   string(req.Path),
 	}
+	done := a.Autoban.Track()
 	adm, decision := a.Autoban.Begin(ctx, meta)
+	done()
 	autoban.RecordDecision(a.Name, meta.Subject.Mode, decision)
 	if decision.Degraded {
 		autoban.AuditDegradation(a.Logger, a.Name, decision.Reason)
@@ -120,7 +122,9 @@ func (a *Application) finishAutoban(ctx context.Context, adm autoban.Admission, 
 		return autoban.Decision{Action: autoban.ActionNone}
 	}
 	evidence := captureEvidence(tx, wafErr)
+	done := a.Autoban.Track()
 	decision := a.Autoban.Observe(ctx, adm, evidence)
+	done()
 	mode := adm.Meta.Subject.Mode
 	autoban.RecordDecision(a.Name, mode, decision)
 	if decision.Ban != nil {

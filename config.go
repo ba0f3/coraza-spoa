@@ -105,26 +105,47 @@ func (c *config) reloadConfig(a *internal.Agent, runtime *autobanRuntime) (*conf
 		return nil, fmt.Errorf("changing bind is not supported yet")
 	}
 
-	if runtime != nil {
-		if newCfg.compiledAutoban.Enabled() != c.compiledAutoban.Enabled() ||
-			!reflect.DeepEqual(newCfg.redisAutoban, c.redisAutoban) ||
-			newCfg.Autoban.AdminSocket != c.Autoban.AdminSocket {
-			return nil, fmt.Errorf("changing autoban restart-only settings requires a restart")
-		}
-		if err := runtime.ReplaceConfig(newCfg.compiledAutoban); err != nil {
-			return nil, fmt.Errorf("replacing autoban policy: %w", err)
-		}
+	if err := publishReload(c, newCfg, a, runtime); err != nil {
+		return nil, err
 	}
-
-	apps, err := newCfg.newApplications()
-	if err != nil {
-		return nil, fmt.Errorf("error applying configuration: %w", err)
-	}
-	attachAutoban(apps, runtime)
-
-	a.ReplaceApplications(apps, apps[newCfg.DefaultApplication])
 	globalLogger.Info().Msg("Configuration successfully reloaded")
 	return newCfg, nil
+}
+
+// publishReload validates replacement applications before staging the
+// auto-ban policy. A failed build leaves both the WAF and policy snapshots on
+// the previous configuration, matching the caller's "using old configuration"
+// guarantee.
+func publishReload(oldCfg, newCfg *config, a *internal.Agent, runtime *autobanRuntime) error {
+	apps, err := newCfg.newApplications()
+	if err != nil {
+		return fmt.Errorf("error applying configuration: %w", err)
+	}
+	if err := applyReload(oldCfg, newCfg, a, runtime); err != nil {
+		return err
+	}
+	attachAutoban(apps, runtime)
+	if a != nil {
+		a.ReplaceApplications(apps, apps[newCfg.DefaultApplication])
+	}
+	return nil
+}
+
+// applyReload stages the auto-ban policy replacement; it is called only after
+// replacement applications have compiled successfully.
+func applyReload(oldCfg, newCfg *config, _ *internal.Agent, runtime *autobanRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	if newCfg.compiledAutoban.Enabled() != oldCfg.compiledAutoban.Enabled() ||
+		!reflect.DeepEqual(newCfg.redisAutoban, oldCfg.redisAutoban) ||
+		newCfg.Autoban.AdminSocket != oldCfg.Autoban.AdminSocket {
+		return fmt.Errorf("changing autoban restart-only settings requires a restart")
+	}
+	if err := runtime.ReplaceConfig(newCfg.compiledAutoban); err != nil {
+		return fmt.Errorf("replacing autoban policy: %w", err)
+	}
+	return nil
 }
 
 func attachAutoban(apps map[string]*internal.Application, runtime *autobanRuntime) {

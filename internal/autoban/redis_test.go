@@ -200,6 +200,27 @@ func TestRedisBudgetAndNoReplay(t *testing.T) {
 	})
 }
 
+func TestRedisContextTimeouts(t *testing.T) {
+	cfg := testRedisConfig()
+	store, err := NewRedisStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	client, ok := store.client.(*redis.Client)
+	if !ok {
+		t.Fatalf("expected a standalone client, got %T", store.client)
+	}
+	opts := client.Options()
+	if !opts.ContextTimeoutEnabled {
+		t.Fatal("context deadlines must control socket I/O")
+	}
+	if opts.ReadTimeout > cfg.OperationTimeout || opts.WriteTimeout > cfg.OperationTimeout {
+		t.Fatalf("socket timeouts %s/%s exceed operation timeout %s",
+			opts.ReadTimeout, opts.WriteTimeout, cfg.OperationTimeout)
+	}
+}
+
 func TestRedisFailures(t *testing.T) {
 	cases := []struct {
 		name      string

@@ -118,6 +118,36 @@ func TestAutobanReloadSnapshot(t *testing.T) {
 	}
 }
 
+func TestAutobanFailedReloadKeepsPolicy(t *testing.T) {
+	compiled, redis := runtimeConfig(t, 3, autoban.ModeObserve, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime, err := newAutobanRuntime(ctx, compiled, redis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Shutdown(context.Background())
+	before := runtime.Engine()
+
+	oldCfg := &config{compiledAutoban: compiled, redisAutoban: redis}
+	newCfg, err := decodeConfig(t, renderConfig(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCfg.compiledAutoban = compiled
+	newCfg.redisAutoban = redis
+	// WAF directives that cannot compile: application publication must fail and
+	// the already-published auto-ban engine and revision must remain unchanged.
+	newCfg.Applications[0].Log.Format = "not-a-format"
+
+	if err := publishReload(oldCfg, newCfg, nil, runtime); err == nil {
+		t.Fatal("expected application compilation to fail")
+	}
+	if runtime.Engine() != before {
+		t.Fatal("a failed reload must not publish the new policy")
+	}
+}
+
 func TestAutobanShutdown(t *testing.T) {
 	compiled, redis := runtimeConfig(t, 3, autoban.ModeObserve, "")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,7 +155,8 @@ func TestAutobanShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := runtime.Track()
+	// Track through the published engine, exactly as the request bridge does.
+	done := runtime.Engine().Track()
 	shutdownDone := make(chan error, 1)
 	go func() {
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 500*time.Millisecond)
