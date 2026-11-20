@@ -199,12 +199,9 @@ func (a *Application) HandleRequest(ctx context.Context, writer *encoding.Action
 		// If the response never arrives, the TTL eviction callback closes and
 		// logs the transaction, the same safety net every cached transaction
 		// already relies on.
-		if a.ResponseCheck {
-			var interruption ErrInterrupted
-			if err == nil || (req.DetectOnly && errors.As(err, &interruption)) {
-				a.cache.SetWithExpiration(tx.ID(), &transaction{tx: tx, detectOnly: req.DetectOnly}, a.TransactionTTL)
-				return
-			}
+		if a.ResponseCheck && cacheForResponse(err, &req, autobanDecision) {
+			a.cache.SetWithExpiration(tx.ID(), &transaction{tx: tx, detectOnly: req.DetectOnly}, a.TransactionTTL)
+			return
 		}
 
 		tx.ProcessLogging()

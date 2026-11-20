@@ -134,6 +134,16 @@ func TestAutobanTransactionOwnership(t *testing.T) {
 	}
 }
 
+func TestAutobanLocalDenialNotCached(t *testing.T) {
+	req := &applicationRequest{}
+	if cacheForResponse(nil, req, autoban.Decision{Action: autoban.ActionBan}) {
+		t.Fatal("a locally policy-denied transaction must not be cached for response correlation")
+	}
+	if !cacheForResponse(nil, req, autoban.Decision{Action: autoban.ActionNone}) {
+		t.Fatal("an allowed transaction must retain the existing response correlation path")
+	}
+}
+
 func TestAutobanDecisionComposition(t *testing.T) {
 	writer := encoding.NewActionWriter(make([]byte, 4096), 0)
 	decision := autoban.Decision{

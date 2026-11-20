@@ -106,6 +106,7 @@ type Admission struct {
 	RedisAdmittedAtMS    int64
 	LocalAdmittedAt      time.Time
 	Fences               map[Scope]string
+	SuppressedUntilMS    map[Scope]int64
 	RemainingStoreBudget time.Duration
 	Usable               bool
 	ShadowStopped        bool
@@ -172,12 +173,13 @@ type BeginResult struct {
 
 // ObserveCommand is the evidence store command.
 type ObserveCommand struct {
-	Subject      Subject
-	RequestID    RequestID
-	Revision     string
-	AdmittedAtMS int64
-	Fences       map[Scope]string
-	Policies     []MatchSpec
+	Subject           Subject
+	RequestID         RequestID
+	Revision          string
+	AdmittedAtMS      int64
+	Fences            map[Scope]string
+	SuppressedUntilMS map[Scope]int64
+	Policies          []MatchSpec
 }
 
 // ObserveResult is the evidence store result.

@@ -14,6 +14,17 @@ import (
 	"github.com/corazawaf/coraza-spoa/internal/autoban"
 )
 
+// cacheForResponse decides whether a transaction stays owned by the response
+// correlation cache. A local policy denial must close the transaction instead
+// of leaving an orphan waiting for a coraza-res that will never arrive.
+func cacheForResponse(wafErr error, req *applicationRequest, decision autoban.Decision) bool {
+	if decision.Action != autoban.ActionNone && decision.Action != "" {
+		return false
+	}
+	var interruption ErrInterrupted
+	return wafErr == nil || (req.DetectOnly && errors.As(wafErr, &interruption))
+}
+
 // newPolicyRequestID generates the independent 128-bit policy identity.
 func newPolicyRequestID() (autoban.RequestID, error) {
 	var id autoban.RequestID

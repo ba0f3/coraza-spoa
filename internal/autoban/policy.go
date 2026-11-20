@@ -138,6 +138,14 @@ func cloneEvidence(in Evidence) Evidence {
 	return out
 }
 
+func cloneSuppression(in map[Scope]int64) map[Scope]int64 {
+	out := make(map[Scope]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func cloneFences(in map[Scope]string) map[Scope]string {
 	out := make(map[Scope]string, len(in))
 	for k, v := range in {

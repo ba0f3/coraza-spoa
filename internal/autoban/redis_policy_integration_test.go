@@ -248,6 +248,39 @@ func TestRedisAdminReceipt(t *testing.T) {
 	}
 }
 
+// TestRedisSuppressionWindow proves an operator unban's match-suppression
+// window prevents a freshly admitted request from recreating a ban.
+func TestRedisSuppressionWindow(t *testing.T) {
+	store, _, _ := itStore(t)
+	subj := itSubject(ModeEnforce)
+	p := match("a-supp", "supp", ScopeApplication, 1, 60_000, 60_000)
+
+	reset, err := store.Unban(context.Background(), UnbanRequest{
+		Mode: ModeEnforce, Scope: ScopeApplication, Application: subj.Application,
+		IP: subj.IP, OperationID: "supp-op", SuppressFor: 60 * time.Second, Reason: "false positive",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin := itBegin(t, store, subj, RequestID{1})
+	if begin.SuppressedUntilMS[ScopeApplication] <= 0 {
+		t.Fatalf("Begin must report suppression: %+v", begin.SuppressedUntilMS)
+	}
+	res, err := store.Observe(context.Background(), ObserveCommand{
+		Subject: subj, RequestID: RequestID{2}, Revision: "rev-1",
+		AdmittedAtMS: begin.NowMS, Fences: begin.Fences,
+		SuppressedUntilMS: begin.SuppressedUntilMS,
+		Policies:          []MatchSpec{p},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Bans) != 0 {
+		t.Fatalf("suppressed scope must not create a ban, got %+v", res.Bans)
+	}
+	_ = reset
+}
+
 func TestRedisCleanAdmission(t *testing.T) {
 	store, raw, cfg := itStore(t)
 	subj := itSubject(ModeEnforce)

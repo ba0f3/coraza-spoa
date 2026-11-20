@@ -2,7 +2,15 @@
 local mode, app, iphex, reqid, revision = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]
 local admitted = tonumber(ARGV[6])
 local captured_global, captured_app = ARGV[7], ARGV[8]
-local npolicies = tonumber(ARGV[9])
+local nsuppressed = tonumber(ARGV[9])
+local suppressed_until = {}
+local idx = 10
+for _ = 1, nsuppressed do
+  suppressed_until[ARGV[idx]] = tonumber(ARGV[idx + 1])
+  idx = idx + 2
+end
+local npolicies = tonumber(ARGV[idx])
+idx = idx + 1
 local now = now_ms()
 
 local elapsed = now - admitted
@@ -38,7 +46,6 @@ for i = 1, 2 do
 end
 
 local policies = {}
-local idx = 10
 for _ = 1, npolicies do
   local fp, id, scope, threshold, window, banfor = ARGV[idx], ARGV[idx + 1], ARGV[idx + 2], tonumber(ARGV[idx + 3]), tonumber(ARGV[idx + 4]), tonumber(ARGV[idx + 5])
   idx = idx + 6
@@ -72,6 +79,10 @@ for _, p in ipairs(policies) do
       if tonumber(ban.created_at_ms) > admitted then skip = true end
     end
   end
+  -- An operator unban's suppression window blocks new match strikes (not rate
+  -- buckets) in the selected scope until it expires.
+  local scope_name = scopes[scope_idx]
+  if suppressed_until[scope_name] and suppressed_until[scope_name] > now then skip = true end
 
   if not skip then
     local field = "m:" .. p.fp

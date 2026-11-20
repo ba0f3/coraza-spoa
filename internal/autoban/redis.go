@@ -286,8 +286,14 @@ func (s *RedisStore) Observe(ctx context.Context, cmd ObserveCommand) (ObserveRe
 		string(cmd.Subject.Mode), cmd.Subject.Application, ipHex(cmd.Subject.IP),
 		requestIDHex(cmd.RequestID), cmd.Revision, cmd.AdmittedAtMS,
 		nonceFor(cmd.Fences, ScopeGlobal), nonceFor(cmd.Fences, ScopeApplication),
-		len(cmd.Policies),
+		len(cmd.SuppressedUntilMS),
 	}
+	for _, scope := range []Scope{ScopeGlobal, ScopeApplication} {
+		if until, ok := cmd.SuppressedUntilMS[scope]; ok {
+			args = append(args, string(scope), until)
+		}
+	}
+	args = append(args, len(cmd.Policies))
 	for _, p := range cmd.Policies {
 		args = append(args, p.Ref.Fingerprint, p.Ref.ID, string(p.Ref.Scope), p.Threshold, p.WindowMS, p.BanForMS)
 	}

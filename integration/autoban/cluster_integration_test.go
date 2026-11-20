@@ -61,6 +61,47 @@ func post(t *testing.T, base, path string) (*http.Response, int) {
 	return resp, resp.StatusCode
 }
 
+func TestClusterEncodedPaths(t *testing.T) {
+	resetState(t)
+	a := endpoint(t, "A")
+	// The match rule selects the raw path /get. An encoded alias must not be
+	// decoded into a match by the policy layer.
+	if got := get(t, a, "/%67et"); got != http.StatusOK {
+		t.Fatalf("encoded alias status = %d, want 200", got)
+	}
+}
+
+func TestClusterPersistentConnections(t *testing.T) {
+	resetState(t)
+	a := endpoint(t, "A")
+	for i := 0; i < 2; i++ {
+		if got := get(t, a, "/get"); got != http.StatusOK {
+			t.Fatalf("keep-alive request %d = %d, want 200", i, got)
+		}
+	}
+	if got := get(t, a, "/get"); got != http.StatusForbidden {
+		t.Fatalf("ban must be rechecked on a persistent connection, got %d", got)
+	}
+}
+
+func TestClusterResponseOwnership(t *testing.T) {
+	resetState(t)
+	a := endpoint(t, "A")
+	if got := get(t, a, "/get"); got != http.StatusOK {
+		t.Fatalf("allowed request = %d, want 200", got)
+	}
+	// The fixture disables response_check; an allowed request must still reach
+	// the origin and return a normal response with no policy override.
+	resp, err := client.Get(a + "/get")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second allowed request = %d", resp.StatusCode)
+	}
+}
+
 func TestClusterSharedBan(t *testing.T) {
 	resetState(t)
 	a, b := endpoint(t, "A"), endpoint(t, "B")

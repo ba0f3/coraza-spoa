@@ -90,6 +90,7 @@ func (e *Engine) Begin(ctx context.Context, meta RequestMeta) (Admission, Decisi
 	adm.RedisAdmittedAtMS = res.NowMS
 	adm.LocalAdmittedAt = admitTime
 	adm.Fences = cloneFences(res.Fences)
+	adm.SuppressedUntilMS = cloneSuppression(res.SuppressedUntilMS)
 
 	d := Decision{Action: ActionNone}
 	if b := pickBan(res.Bans, RequestID{}, false); b != nil {
@@ -140,12 +141,13 @@ func (e *Engine) Observe(ctx context.Context, adm Admission, evidence Evidence) 
 
 	callCtx, cancel := e.contextWithBudget(ctx, adm.RemainingStoreBudget)
 	res, err := e.store.Observe(callCtx, ObserveCommand{
-		Subject:      adm.Meta.Subject,
-		RequestID:    adm.Meta.RequestID,
-		Revision:     e.config.revision,
-		AdmittedAtMS: adm.RedisAdmittedAtMS,
-		Fences:       cloneFences(adm.Fences),
-		Policies:     policies,
+		Subject:           adm.Meta.Subject,
+		RequestID:         adm.Meta.RequestID,
+		Revision:          e.config.revision,
+		AdmittedAtMS:      adm.RedisAdmittedAtMS,
+		Fences:            cloneFences(adm.Fences),
+		SuppressedUntilMS: cloneSuppression(adm.SuppressedUntilMS),
+		Policies:          policies,
 	})
 	cancel()
 	if err != nil {
