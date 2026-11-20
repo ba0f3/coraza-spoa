@@ -1,0 +1,55 @@
+bind: unix:///tmp/coraza-spoa.sock
+default_application: sample_app
+log_level: info
+log_file: /dev/stdout
+log_format: json
+
+autoban:
+  enabled: true
+  mode: observe
+  on_store_error: continue_waf
+  redis:
+    addresses: [127.0.0.1:6379]
+    db: 0
+    key_prefix: coraza-autoban-example
+    tls:
+      enabled: false
+  operation_timeout: 20ms
+  request_store_budget: 50ms
+  max_concurrent_operations: 128
+  admin_socket: /run/coraza-spoa/autoban-admin.sock
+  global_policies: []
+
+applications:
+  - name: sample_app
+    directives: |
+      Include @coraza.conf-recommended
+      Include @crs-setup.conf.example
+      Include @owasp_crs/*.conf
+      SecRule REQUEST_FILENAME "@rx ^/(?:\.env|\.git/config)$" "id:190100,phase:1,pass,nolog,t:none,tag:'autoban/secret-probe',msg:'Secret file probe'"
+      SecRuleEngine On
+    response_check: false
+    transaction_ttl_ms: 60000
+    log_level: info
+    log_file: /dev/stdout
+    log_format: json
+    autoban:
+      enabled: true
+      exempt_cidrs: []
+      policies:
+        - id: secret-probe
+          enabled: true
+          type: match
+          rule_tags: [autoban/secret-probe]
+          rule_ids: []
+          window: 60s
+          threshold: 3
+          ban_for: 15m
+        - id: login-rate
+          enabled: true
+          type: rate
+          methods: [POST]
+          path_exact: [/login]
+          requests: 20
+          period: 10s
+          burst: 10

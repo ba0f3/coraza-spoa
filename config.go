@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -13,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/corazawaf/coraza-spoa/internal"
+	"github.com/corazawaf/coraza-spoa/internal/autoban"
 )
 
 func readConfig() (*config, error) {
@@ -48,20 +50,32 @@ func readConfig() (*config, error) {
 		}
 	}
 
+	compiledAutoban, redisAutoban, err := compileAutoban(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("invalid autoban configuration: %w", err)
+	}
+	cfg.compiledAutoban = compiledAutoban
+	cfg.redisAutoban = redisAutoban
+
 	return &cfg, nil
 }
 
 type config struct {
-	Bind               string    `yaml:"bind"`
-	Log                logConfig `yaml:",inline"`
-	DefaultApplication string    `yaml:"default_application"`
+	Bind               string      `yaml:"bind"`
+	Log                logConfig   `yaml:",inline"`
+	DefaultApplication string      `yaml:"default_application"`
+	Autoban            autobanYAML `yaml:"autoban"`
 	Applications       []struct {
-		Log              logConfig `yaml:",inline"`
-		Name             string    `yaml:"name"`
-		Directives       string    `yaml:"directives"`
-		ResponseCheck    bool      `yaml:"response_check"`
-		TransactionTTLMS int       `yaml:"transaction_ttl_ms"`
+		Log              logConfig      `yaml:",inline"`
+		Name             string         `yaml:"name"`
+		Directives       string         `yaml:"directives"`
+		ResponseCheck    bool           `yaml:"response_check"`
+		TransactionTTLMS int            `yaml:"transaction_ttl_ms"`
+		Autoban          appAutobanYAML `yaml:"autoban"`
 	} `yaml:"applications"`
+
+	compiledAutoban autoban.Config
+	redisAutoban    autoban.RedisConfig
 }
 
 func (c config) networkAddressFromBind() (network string, address string) {
@@ -73,7 +87,7 @@ func (c config) networkAddressFromBind() (network string, address string) {
 	return "tcp", c.Bind
 }
 
-func (c *config) reloadConfig(a *internal.Agent) (*config, error) {
+func (c *config) reloadConfig(a *internal.Agent, runtime *autobanRuntime) (*config, error) {
 	newCfg, err := readConfig()
 	if err != nil {
 		return nil, fmt.Errorf("error loading configuration: %w", err)
@@ -91,17 +105,39 @@ func (c *config) reloadConfig(a *internal.Agent) (*config, error) {
 		return nil, fmt.Errorf("changing bind is not supported yet")
 	}
 
+	if runtime != nil {
+		if newCfg.compiledAutoban.Enabled() != c.compiledAutoban.Enabled() ||
+			!reflect.DeepEqual(newCfg.redisAutoban, c.redisAutoban) ||
+			newCfg.Autoban.AdminSocket != c.Autoban.AdminSocket {
+			return nil, fmt.Errorf("changing autoban restart-only settings requires a restart")
+		}
+		if err := runtime.ReplaceConfig(newCfg.compiledAutoban); err != nil {
+			return nil, fmt.Errorf("replacing autoban policy: %w", err)
+		}
+	}
+
 	apps, err := newCfg.newApplications()
 	if err != nil {
 		return nil, fmt.Errorf("error applying configuration: %w", err)
 	}
+	attachAutoban(apps, runtime)
 
 	a.ReplaceApplications(apps, apps[newCfg.DefaultApplication])
 	globalLogger.Info().Msg("Configuration successfully reloaded")
 	return newCfg, nil
 }
 
-func (c *config) watchConfig(a *internal.Agent) error {
+func attachAutoban(apps map[string]*internal.Application, runtime *autobanRuntime) {
+	if runtime == nil {
+		return
+	}
+	engine := runtime.Engine()
+	for _, app := range apps {
+		app.Autoban = engine
+	}
+}
+
+func (c *config) watchConfig(a *internal.Agent, runtime *autobanRuntime) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("failed to create fsnotify watcher: %w", err)
@@ -134,7 +170,7 @@ func (c *config) watchConfig(a *internal.Agent) error {
 				if err != nil {
 					return fmt.Errorf("failed to add config directory to fsnotify watcher: %w", err)
 				}
-				newCfg, err := c.reloadConfig(a)
+				newCfg, err := c.reloadConfig(a, runtime)
 				if err != nil {
 					globalLogger.Error().Err(err).Msg("Failed to reload configuration, using old configuration")
 					continue
@@ -188,22 +224,22 @@ type logConfig struct {
 func (lc logConfig) outputWriter() (io.Writer, error) {
 	var out io.Writer
 	switch lc.File {
-		case "":
-			fallthrough
-		case "/dev/stdout":
-			out = os.Stdout
-		case "/dev/stderr":
-			out = os.Stderr
-		case "/dev/null":
-			out = io.Discard
-		default:
-			// TODO: Close the handle if not used anymore.
-			// Currently these are leaked as soon as we reload.
-			f, err := os.OpenFile(lc.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-			if err != nil {
-				return nil, err
-			}
-			out = f
+	case "":
+		fallthrough
+	case "/dev/stdout":
+		out = os.Stdout
+	case "/dev/stderr":
+		out = os.Stderr
+	case "/dev/null":
+		out = io.Discard
+	default:
+		// TODO: Close the handle if not used anymore.
+		// Currently these are leaked as soon as we reload.
+		f, err := os.OpenFile(lc.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+		if err != nil {
+			return nil, err
+		}
+		out = f
 	}
 	return out, nil
 }

@@ -231,3 +231,14 @@ sum by (application) (rate(coraza_inbound_anomaly_score_sum[5m]))
 
 Request and completion rates can differ while responses are pending. The SPOE
 duration histogram's `_count` counts messages, so it is not an HTTP request total.
+
+## Cluster-wide scanner auto-ban (opt-in)
+
+A separate, disabled-by-default package can share scanner bans and endpoint
+rate limits across SPOA processes through a Redis primary. HAProxy enforces the
+returned `429`/`403`; Coraza remains the rule engine and existing WAF metrics
+keep their meaning. See [docs/autoban.md](docs/autoban.md) for trusted client
+setup, rollout, administration, and limitations, and
+[`example/autoban/coraza-spoa.yaml`](example/autoban/coraza-spoa.yaml) for a
+complete observe-mode example. The general-purpose examples leave auto-ban
+disabled.

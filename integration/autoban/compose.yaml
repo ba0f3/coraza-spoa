@@ -1,0 +1,75 @@
+services:
+  redis:
+    image: redis:7.2
+    command:
+      - redis-server
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "6379"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    ports:
+      - "127.0.0.1:16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  httpbin:
+    image: mccutchen/go-httpbin:2.25.0
+    command: ["/bin/go-httpbin", "-port", "8081"]
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  spoa-a:
+    build:
+      context: ../..
+      dockerfile: example/Dockerfile
+    command: ["/coraza-spoa", "--config", "/config.yaml"]
+    volumes:
+      - ./spoa-a.yaml:/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  spoa-b:
+    build:
+      context: ../..
+      dockerfile: example/Dockerfile
+    command: ["/coraza-spoa", "--config", "/config.yaml"]
+    volumes:
+      - ./spoa-b.yaml:/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  haproxy-a:
+    image: haproxy:${AUTOBAN_HAPROXY_VERSION:-2.8}-alpine
+    command: ["-f", "/usr/local/etc/haproxy/haproxy-a.cfg", "-db"]
+    ports:
+      - "127.0.0.1:18080:80"
+    volumes:
+      - ./:/usr/local/etc/haproxy:ro
+    depends_on:
+      - spoa-a
+      - httpbin
+
+  haproxy-b:
+    image: haproxy:${AUTOBAN_HAPROXY_VERSION:-2.8}-alpine
+    command: ["-f", "/usr/local/etc/haproxy/haproxy-b.cfg", "-db"]
+    ports:
+      - "127.0.0.1:18081:80"
+    volumes:
+      - ./:/usr/local/etc/haproxy:ro
+    depends_on:
+      - spoa-b
+      - httpbin
